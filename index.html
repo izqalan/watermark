@@ -1,0 +1,873 @@
+<meta charset="utf-8">
+<title>Photo Watermarker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;800&family=Caveat:wght@600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Libre+Caslon+Text:ital,wght@1,400&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+/* Layout: light-table workspace. Photo on a checkered stage at left, a sticky control rail at right; stacks on phones. */
+:root {
+  --bg: #E8ECEE;
+  --surface: #F4F6F7;
+  --panel: #FFFFFF;
+  --ink: #15191C;
+  --muted: #5A646C;
+  --line: #D2D8DC;
+  --accent: #0B6C7E;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #D7EBEF;
+  --stage: #DADFE2;
+  --check: #CFD5D9;
+  --overlay: rgba(232, 236, 238, 0.9);
+  --danger: #B42318;
+  --shadow: 0 1px 2px rgba(20, 30, 36, 0.18), 0 10px 30px rgba(20, 30, 36, 0.16);
+
+  --ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace;
+  --display: "Archivo", "IBM Plex Sans", system-ui, sans-serif;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1214; --surface: #161B1E; --panel: #1A2024; --ink: #E6EBEE; --muted: #96A1A9;
+    --line: #2A3237; --accent: #4CC0D4; --accent-ink: #062228; --accent-soft: #15343B;
+    --stage: #0A0D0F; --check: #13181B; --overlay: rgba(15, 18, 20, 0.9); --danger: #F97066;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1214; --surface: #161B1E; --panel: #1A2024; --ink: #E6EBEE; --muted: #96A1A9;
+  --line: #2A3237; --accent: #4CC0D4; --accent-ink: #062228; --accent-soft: #15343B;
+  --stage: #0A0D0F; --check: #13181B; --overlay: rgba(15, 18, 20, 0.9); --danger: #F97066;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--ui); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app {
+  max-width: 1380px; margin: 0 auto;
+  padding-inline: clamp(16px, 3vw, 32px); padding-block: 14px 40px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+/* Header */
+.bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+.brand svg { flex: none; }
+.brand h1 { margin: 0; font: 800 21px/1 var(--display); letter-spacing: -0.015em; text-wrap: balance; }
+.note { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.note svg { flex: none; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 38px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+.btn.block { width: 100%; }
+
+/* Workspace */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 16px; align-items: start; }
+.stage { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.canvas-wrap {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  min-height: 340px; padding: 16px; border-radius: var(--r); border: 1px solid var(--line);
+  background: repeating-conic-gradient(var(--check) 0 25%, var(--stage) 0 50%) 0 0 / 22px 22px;
+}
+#preview { display: block; max-width: 100%; box-shadow: var(--shadow); }
+.empty {
+  display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;
+  padding: 48px 20px; max-width: 420px;
+}
+.empty h2 { margin: 0; font: 800 22px/1.15 var(--display); text-wrap: balance; }
+.empty p { margin: 0; color: var(--muted); }
+
+.meta {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
+  font: 400 12.5px/1.4 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 0;
+}
+.meta .name { color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.tag {
+  font: 500 10.5px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 4px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+}
+
+.strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; }
+.thumb {
+  position: relative; flex: none; width: 92px; height: 66px; padding: 0; border-radius: 6px;
+  border: 2px solid transparent; background: var(--stage); cursor: pointer; overflow: hidden;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb[aria-current="true"] { border-color: var(--accent); }
+.thumb .x {
+  position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; border: 0; padding: 0; cursor: pointer;
+  background: rgba(10, 14, 16, 0.72); color: #FFFFFF; font-size: 13px; line-height: 1;
+}
+.thumb .x:hover { background: var(--danger); }
+.add-tile {
+  flex: none; width: 92px; height: 66px; border-radius: 6px; border: 1.5px dashed var(--line);
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1.2;
+}
+.add-tile:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Control rail */
+.panel {
+  position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 18px; display: flex; flex-direction: column; gap: 18px;
+}
+.group { display: flex; flex-direction: column; gap: 12px; }
+.group + .group { border-top: 1px solid var(--line); padding-top: 18px; }
+.group-label { margin: 0; font: 500 11px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+
+.text-input {
+  width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); font-size: 16px; font-weight: 500;
+}
+.text-input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.field-head label, .lbl { font-weight: 500; font-size: 13px; }
+output { font: 400 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; margin: 4px 0; accent-color: var(--accent); }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
+.seg button { border: 0; border-radius: 6px; padding: 7px 8px; background: transparent; cursor: pointer; font-weight: 500; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.place { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.place .field { flex: 1 1 120px; }
+.posgrid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; width: 120px; aspect-ratio: 3 / 2;
+  padding: 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); flex: none;
+}
+.posgrid button { border: 0; padding: 0; background: transparent; border-radius: 3px; cursor: pointer; display: grid; place-items: center; }
+.posgrid button::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.posgrid button:hover::after { background: var(--muted); }
+.posgrid button[aria-pressed="true"] { background: var(--accent-soft); }
+.posgrid button[aria-pressed="true"]::after { width: 10px; height: 10px; background: var(--accent); }
+
+select {
+  width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface);
+}
+.swatches { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sw {
+  width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); padding: 0; cursor: pointer;
+  box-shadow: inset 0 0 0 2px var(--panel);
+}
+.sw[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.custom-color { position: relative; width: 30px; height: 30px; border-radius: 50%; overflow: hidden; border: 1px solid var(--line); }
+.custom-color[data-on="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.custom-color input { position: absolute; inset: -8px; width: 46px; height: 46px; border: 0; padding: 0; cursor: pointer; }
+.check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.hint { margin: 0; font-size: 12.5px; color: var(--muted); }
+.actions { display: flex; flex-direction: column; gap: 8px; }
+
+/* Drop overlay + toast */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px;
+  background: var(--overlay);
+}
+.drop-overlay div {
+  width: min(560px, 100%); padding: 56px 24px; border-radius: 16px; border: 2px dashed var(--accent);
+  text-align: center; font: 800 26px/1.2 var(--display); color: var(--ink);
+}
+.drop-overlay span { display: block; margin-top: 8px; font: 400 14px var(--ui); color: var(--muted); }
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); z-index: 30;
+  transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
+  max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 8px;
+  background: var(--ink); color: var(--bg); font-weight: 500; box-shadow: var(--shadow);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 880px) {
+  .work { grid-template-columns: minmax(0, 1fr); }
+  .panel { position: static; }
+  .canvas-wrap { min-height: 240px; padding: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1.5" y="4.5" width="25" height="19" rx="3" fill="none" stroke="var(--ink)" stroke-width="2"></rect>
+        <path d="M6 19 L12 12 L16 16 L19 13 L23 19" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"></path>
+        <circle cx="20" cy="9.5" r="1.8" fill="var(--accent)"></circle>
+      </svg>
+      <h1>Photo Watermarker</h1>
+    </div>
+    <p class="note">
+      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
+      Runs in your browser. Photos are never uploaded.
+    </p>
+    <button class="btn primary" id="addBtn" type="button">Add photos</button>
+    <input id="fileInput" type="file" accept="image/*" multiple hidden>
+  </header>
+
+  <main class="work">
+    <section class="stage" aria-label="Preview">
+      <div class="canvas-wrap" id="wrap">
+        <canvas id="preview" aria-label="Watermarked preview"></canvas>
+        <div class="empty" id="empty" hidden>
+          <h2>Drop photos here</h2>
+          <p>Drag JPEG, PNG or WebP files anywhere on this page, paste an image, or pick files from your computer.</p>
+          <button class="btn primary" id="emptyAdd" type="button">Choose photos</button>
+        </div>
+      </div>
+      <div class="meta" id="meta"></div>
+      <div class="strip" id="strip" aria-label="Loaded photos"></div>
+    </section>
+
+    <aside class="panel" aria-label="Watermark settings">
+      <div class="group">
+        <label class="group-label" for="text">Watermark text</label>
+        <input class="text-input" id="text" type="text" autocomplete="off" spellcheck="false" placeholder="Type your watermark">
+      </div>
+
+      <div class="group">
+        <p class="group-label">Layout</p>
+        <div class="seg" role="group" aria-label="Layout">
+          <button type="button" data-mode="single" aria-pressed="true">Single mark</button>
+          <button type="button" data-mode="tiled" aria-pressed="false">Tiled pattern</button>
+        </div>
+        <div class="place" id="singleOpts">
+          <div>
+            <span class="lbl" id="posLbl">Position</span>
+            <div class="posgrid" id="posgrid" role="group" aria-labelledby="posLbl"></div>
+          </div>
+          <div class="field">
+            <div class="field-head"><label for="margin">Edge margin</label><output id="marginOut"></output></div>
+            <input id="margin" type="range" min="0" max="15" step="0.5">
+          </div>
+        </div>
+        <div class="field" id="tiledOpts" hidden>
+          <div class="field-head"><label for="gap">Spacing</label><output id="gapOut"></output></div>
+          <input id="gap" type="range" min="30" max="400" step="10">
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="rot">Rotation</label><output id="rotOut"></output></div>
+          <input id="rot" type="range" min="-90" max="90" step="1">
+        </div>
+      </div>
+
+      <div class="group">
+        <p class="group-label">Style</p>
+        <div class="field">
+          <label class="lbl" for="font">Typeface</label>
+          <select id="font"></select>
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="size">Size</label><output id="sizeOut"></output></div>
+          <input id="size" type="range" min="1" max="30" step="0.5">
+        </div>
+        <div class="field">
+          <div class="field-head"><label for="opacity">Opacity</label><output id="opacityOut"></output></div>
+          <input id="opacity" type="range" min="5" max="100" step="1">
+        </div>
+        <div class="field">
+          <span class="lbl" id="colorLbl">Color</span>
+          <div class="swatches" role="group" aria-labelledby="colorLbl">
+            <button class="sw" type="button" data-color="#FFFFFF" style="background:#FFFFFF" aria-label="White"></button>
+            <button class="sw" type="button" data-color="#111111" style="background:#111111" aria-label="Black"></button>
+            <button class="sw" type="button" data-color="#E8C547" style="background:#E8C547" aria-label="Yellow"></button>
+            <button class="sw" type="button" data-color="#D64545" style="background:#D64545" aria-label="Red"></button>
+            <label class="custom-color" id="customWrap" title="Custom color">
+              <span class="sr">Custom color</span>
+              <input id="customColor" type="color" value="#4CC0D4">
+            </label>
+          </div>
+        </div>
+        <label class="check"><input id="shadow" type="checkbox"> Soft shadow for contrast</label>
+      </div>
+
+      <div class="group">
+        <p class="group-label">Export</p>
+        <div class="field">
+          <label class="lbl" for="format">File format</label>
+          <select id="format">
+            <option value="original">Same as original</option>
+            <option value="image/jpeg">JPEG</option>
+            <option value="image/png">PNG</option>
+            <option value="image/webp">WebP</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button class="btn primary block" id="saveOne" type="button">Save this photo</button>
+          <button class="btn block" id="saveAll" type="button" hidden>Save all as .zip</button>
+        </div>
+        <p class="hint" id="exportHint">The same watermark is applied to every photo, at full resolution.</p>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div class="drop-overlay" id="dropOverlay" hidden>
+  <div>Drop to add photos<span>JPEG, PNG and WebP. Add as many as you like.</span></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var FONTS = {
+    "sans-bold": { label: "Sans, bold", family: '"Archivo", "Arial Black", Arial, sans-serif', load: '"Archivo"', weight: 800, style: "normal" },
+    "sans":      { label: "Sans, medium", family: '"Archivo", Arial, sans-serif', load: '"Archivo"', weight: 500, style: "normal" },
+    "serif":     { label: "Serif, italic", family: '"Libre Caslon Text", Georgia, serif', load: '"Libre Caslon Text"', weight: 400, style: "italic" },
+    "script":    { label: "Handwritten", family: '"Caveat", "Segoe Script", cursive', load: '"Caveat"', weight: 600, style: "normal" },
+    "mono":      { label: "Monospace", family: '"IBM Plex Mono", Consolas, monospace', load: '"IBM Plex Mono"', weight: 500, style: "normal" }
+  };
+  var POSITIONS = ["Top left", "Top center", "Top right", "Middle left", "Center", "Middle right", "Bottom left", "Bottom center", "Bottom right"];
+  var TYPES = { "image/jpeg": ["JPEG", "jpg"], "image/png": ["PNG", "png"], "image/webp": ["WebP", "webp"] };
+  var DEFAULTS = {
+    text: "© 2026 Your Name", mode: "single", pos: 8, margin: 3, gap: 120,
+    rotSingle: 0, rotTiled: -30, font: "sans-bold", size: 5, opacity: 70,
+    color: "#FFFFFF", shadow: true, format: "original"
+  };
+  var STORE_KEY = "photo-watermarker-settings-v1";
+
+  var S = Object.assign({}, DEFAULTS);
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+    if (saved && typeof saved === "object") Object.keys(DEFAULTS).forEach(function (k) {
+      if (typeof saved[k] === typeof DEFAULTS[k]) S[k] = saved[k];
+    });
+    if (!FONTS[S.font]) S.font = DEFAULTS.font;
+  } catch (e) { /* storage unavailable: use defaults */ }
+  function persist() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) {} }
+
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $("preview"), ctx = canvas.getContext("2d");
+  var wrap = $("wrap"), empty = $("empty"), meta = $("meta"), strip = $("strip");
+  var fileInput = $("fileInput");
+
+  var photos = [], cur = -1, uid = 0;
+  var inViewer = !!(window.claude && typeof window.claude.use === "function");
+
+  /* ---------- Drawing ---------- */
+
+  function isLightColor(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+  }
+
+  // All sizes are relative to the image's shorter side, so the preview and the full-size export match.
+  function drawWatermark(c, w, h, s) {
+    var text = (s.text || "").trim();
+    if (!text) return;
+    var short = Math.min(w, h);
+    var fpx = Math.max(4, short * s.size / 100);
+    var f = FONTS[s.font] || FONTS["sans-bold"];
+    var rot = (s.mode === "tiled" ? s.rotTiled : s.rotSingle) * Math.PI / 180;
+
+    c.save();
+    c.font = f.style + " " + f.weight + " " + fpx + "px " + f.family;
+    c.fillStyle = s.color;
+    c.globalAlpha = s.opacity / 100;
+    if (s.shadow) {
+      c.shadowColor = isLightColor(s.color) ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.45)";
+      c.shadowBlur = fpx * 0.12;
+      c.shadowOffsetY = fpx * 0.03;
+    }
+    var m = c.measureText(text);
+    var tw = m.width;
+    var asc = m.actualBoundingBoxAscent || fpx * 0.75;
+    var desc = m.actualBoundingBoxDescent || fpx * 0.2;
+    var th = asc + desc;
+
+    if (s.mode === "tiled") {
+      c.translate(w / 2, h / 2);
+      c.rotate(rot);
+      c.textAlign = "center";
+      c.textBaseline = "alphabetic";
+      var diag = Math.hypot(w, h) / 2;
+      var stepX = tw + fpx * s.gap / 100;
+      var stepY = th + fpx * s.gap / 100 * 0.6;
+      var rows = Math.ceil(diag / stepY) + 1, cols = Math.ceil(diag / stepX) + 2;
+      for (var r = -rows; r <= rows; r++) {
+        var off = (Math.abs(r) % 2) * stepX / 2;
+        for (var k = -cols; k <= cols; k++) {
+          c.fillText(text, k * stepX + off, r * stepY + (asc - desc) / 2);
+        }
+      }
+    } else {
+      var margin = short * s.margin / 100;
+      var cos = Math.abs(Math.cos(rot)), sin = Math.abs(Math.sin(rot));
+      var bw = tw * cos + th * sin, bh = tw * sin + th * cos;
+      var row = Math.floor(s.pos / 3), col = s.pos % 3;
+      var cx = col === 0 ? margin + bw / 2 : col === 1 ? w / 2 : w - margin - bw / 2;
+      var cy = row === 0 ? margin + bh / 2 : row === 1 ? h / 2 : h - margin - bh / 2;
+      c.translate(cx, cy);
+      c.rotate(rot);
+      c.textAlign = "center";
+      c.textBaseline = "alphabetic";
+      c.fillText(text, 0, (asc - desc) / 2);
+    }
+    c.restore();
+  }
+
+  var queued = false;
+  function schedule() {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(function () { queued = false; renderPreview(); });
+  }
+
+  function renderPreview() {
+    var p = photos[cur];
+    canvas.hidden = !p;
+    empty.hidden = !!p;
+    if (!p) return;
+    var cs = getComputedStyle(wrap);
+    var maxW = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    var maxH = Math.max(220, Math.min(window.innerHeight * 0.7, 960));
+    var scale = Math.min(maxW / p.w, maxH / p.h, 1);
+    var cssW = Math.max(1, Math.round(p.w * scale)), cssH = Math.max(1, Math.round(p.h * scale));
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var pw = Math.min(p.w, Math.round(cssW * dpr)), ph = Math.min(p.h, Math.round(cssH * dpr));
+    if (canvas.width !== pw) canvas.width = pw;
+    if (canvas.height !== ph) canvas.height = ph;
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    ctx.clearRect(0, 0, pw, ph);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(p.bitmap, 0, 0, pw, ph);
+    drawWatermark(ctx, pw, ph, S);
+  }
+
+  /* ---------- Photos ---------- */
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(0) + " KB";
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function makeThumb(bmp) {
+    var tw = 184, th = Math.max(1, Math.round(tw * bmp.height / bmp.width));
+    var c = document.createElement("canvas");
+    c.width = tw; c.height = th;
+    var x = c.getContext("2d");
+    x.imageSmoothingQuality = "high";
+    x.drawImage(bmp, 0, 0, tw, th);
+    return c.toDataURL("image/jpeg", 0.75);
+  }
+
+  function decode(file) {
+    return createImageBitmap(file, { imageOrientation: "from-image" })
+      .catch(function () { return createImageBitmap(file); })
+      .catch(function () {
+        return new Promise(function (res, rej) {
+          var url = URL.createObjectURL(file), img = new Image();
+          img.onload = function () { URL.revokeObjectURL(url); res(img); };
+          img.onerror = function () { URL.revokeObjectURL(url); rej(new Error("decode")); };
+          img.src = url;
+        });
+      })
+      .then(function (b) {
+        if (!b.width && b.naturalWidth) { b.width = b.naturalWidth; b.height = b.naturalHeight; }
+        return b;
+      });
+  }
+
+  function looksLikeImage(f) {
+    return f && (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i.test(f.name || ""));
+  }
+
+  async function addFiles(list) {
+    var files = Array.prototype.filter.call(list || [], looksLikeImage);
+    if (!files.length) { toast("Those aren't image files. Add JPEG, PNG or WebP photos."); return; }
+    var added = [], failed = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var bmp = await decode(f);
+        added.push({ id: ++uid, name: f.name || "pasted-image.png", type: f.type, size: f.size,
+          bitmap: bmp, w: bmp.width, h: bmp.height, thumb: makeThumb(bmp) });
+      } catch (e) { failed.push(f.name); }
+    }
+    if (added.length) {
+      if (photos.length && photos.every(function (p) { return p.sample; })) {
+        photos.forEach(release);
+        photos = [];
+      }
+      cur = photos.length;
+      photos = photos.concat(added);
+    }
+    if (failed.length) {
+      toast("Couldn't open " + failed.join(", ") + ". Convert HEIC or RAW files to JPEG first.");
+    } else if (added.length > 1) {
+      toast("Added " + added.length + " photos");
+    }
+    refresh();
+  }
+
+  function release(p) { if (p.bitmap && p.bitmap.close) p.bitmap.close(); }
+
+  function removePhoto(id) {
+    var i = photos.findIndex(function (p) { return p.id === id; });
+    if (i < 0) return;
+    release(photos[i]);
+    photos.splice(i, 1);
+    if (cur >= photos.length) cur = photos.length - 1;
+    else if (i < cur) cur--;
+    refresh();
+  }
+
+  function renderStrip() {
+    var html = photos.map(function (p, i) {
+      return '<div class="thumb" role="button" tabindex="0" data-i="' + i + '" aria-current="' + (i === cur) +
+        '" aria-label="Show ' + esc(p.name) + '"><img alt="" src="' + p.thumb + '">' +
+        '<button class="x" type="button" data-remove="' + p.id + '" aria-label="Remove ' + esc(p.name) + '">&times;</button></div>';
+    }).join("");
+    if (photos.length) html += '<button class="add-tile" type="button" data-add="1">+ Add<br>photos</button>';
+    strip.innerHTML = html;
+    strip.hidden = !photos.length;
+  }
+
+  function renderMeta() {
+    var p = photos[cur];
+    if (!p) { meta.innerHTML = ""; return; }
+    var parts = [];
+    if (p.sample) parts.push('<span class="tag">Sample</span>');
+    parts.push('<span class="name">' + esc(p.name) + "</span>");
+    parts.push("<span>" + p.w + " &times; " + p.h + " px</span>");
+    if (!p.sample) {
+      parts.push("<span>" + (TYPES[p.type] ? TYPES[p.type][0] : (p.type || "image").replace("image/", "").toUpperCase()) + "</span>");
+      parts.push("<span>" + fmtBytes(p.size) + "</span>");
+    } else {
+      parts.push("<span>Drop your own photos anywhere to replace it</span>");
+    }
+    if (photos.length > 1) parts.push("<span>" + (cur + 1) + " of " + photos.length + "</span>");
+    meta.innerHTML = parts.join("");
+  }
+
+  function renderButtons() {
+    var none = !photos.length, noText = !S.text.trim();
+    $("saveOne").disabled = none || noText;
+    var all = $("saveAll");
+    all.hidden = photos.length < 2;
+    all.textContent = "Save all " + photos.length + " as .zip";
+    all.disabled = noText;
+    $("exportHint").textContent = noText
+      ? "Type a watermark to enable saving."
+      : "The same watermark is applied to every photo, at full resolution.";
+  }
+
+  function refresh() { renderStrip(); renderMeta(); renderButtons(); schedule(); }
+
+  /* ---------- Export ---------- */
+
+  function outType(p) {
+    if (S.format !== "original") return S.format;
+    return TYPES[p.type] ? p.type : "image/jpeg";
+  }
+  function outName(p) {
+    var base = p.name.replace(/\.[^.]+$/, "") || "photo";
+    return base + "-watermarked." + TYPES[outType(p)][1];
+  }
+
+  function renderBlob(p) {
+    return new Promise(function (resolve, reject) {
+      var type = outType(p);
+      var c = document.createElement("canvas");
+      c.width = p.w; c.height = p.h;
+      var x = c.getContext("2d");
+      if (!x) { reject(new Error("canvas")); return; }
+      if (type === "image/jpeg") { x.fillStyle = "#FFFFFF"; x.fillRect(0, 0, p.w, p.h); }
+      x.drawImage(p.bitmap, 0, 0);
+      drawWatermark(x, p.w, p.h, S);
+      c.toBlob(function (b) {
+        c.width = c.height = 0;
+        if (b) resolve(b); else reject(new Error("encode"));
+      }, type, 0.92);
+    });
+  }
+
+  var downloadsCap;
+  async function saveFile(name, blob) {
+    if (inViewer) {
+      if (downloadsCap === undefined) {
+        try { downloadsCap = await window.claude.use("downloads"); } catch (e) { downloadsCap = null; }
+      }
+      if (!downloadsCap) { toast("Saving isn't available in this view."); return false; }
+      try {
+        await downloadsCap.save({ filename: name, data: blob });
+        return true;
+      } catch (e) {
+        var code = e && e.code;
+        if (code === "declined") toast("Save cancelled");
+        else if (code === "rate_limited") toast("A save prompt is already open.");
+        else if (code === "too_large") toast("That file is too large to save here.");
+        else toast("Couldn't save the file" + (e && e.message ? ": " + e.message : "."));
+        return false;
+      }
+    }
+    var url = URL.createObjectURL(blob), a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    return true;
+  }
+
+  async function withBusy(btn, label, fn) {
+    var prev = btn.textContent;
+    btn.disabled = true; btn.textContent = label;
+    try { await fn(function (t) { btn.textContent = t; }); }
+    finally { btn.textContent = prev; renderButtons(); }
+  }
+
+  $("saveOne").addEventListener("click", function () {
+    var p = photos[cur];
+    if (!p) return;
+    withBusy(this, "Saving…", async function () {
+      try {
+        var blob = await renderBlob(p);
+        if (await saveFile(outName(p), blob)) toast("Saved " + outName(p));
+      } catch (e) {
+        toast("Couldn't create the image. It may be too large for this browser.");
+      }
+    });
+  });
+
+  $("saveAll").addEventListener("click", function () {
+    if (photos.length < 2) return;
+    withBusy(this, "Preparing…", async function (set) {
+      try {
+        if (window.JSZip) {
+          var zip = new window.JSZip(), used = {};
+          for (var i = 0; i < photos.length; i++) {
+            set("Watermarking " + (i + 1) + " of " + photos.length + "…");
+            var name = outName(photos[i]), n = 2, stem = name.replace(/(\.[^.]+)$/, "");
+            var ext = name.slice(stem.length);
+            while (used[name]) name = stem + "-" + (n++) + ext;
+            used[name] = true;
+            zip.file(name, await renderBlob(photos[i]), { compression: "STORE" });
+          }
+          set("Packing zip…");
+          var blob = await zip.generateAsync({ type: "blob" });
+          if (await saveFile("watermarked-photos.zip", blob)) toast("Saved " + photos.length + " photos as watermarked-photos.zip");
+        } else {
+          for (var j = 0; j < photos.length; j++) {
+            set("Saving " + (j + 1) + " of " + photos.length + "…");
+            if (!(await saveFile(outName(photos[j]), await renderBlob(photos[j])))) return;
+          }
+          toast("Saved " + photos.length + " photos");
+        }
+      } catch (e) {
+        toast("Couldn't create the images. One may be too large for this browser.");
+      }
+    });
+  });
+
+  /* ---------- Controls ---------- */
+
+  var textEl = $("text"), fontEl = $("font"), formatEl = $("format");
+  var ranges = { margin: "%", gap: "%", size: "%", opacity: "%" };
+
+  Object.keys(FONTS).forEach(function (k) {
+    var o = document.createElement("option");
+    o.value = k; o.textContent = FONTS[k].label;
+    fontEl.appendChild(o);
+  });
+  $("posgrid").innerHTML = POSITIONS.map(function (label, i) {
+    return '<button type="button" data-pos="' + i + '" aria-label="' + label + '" title="' + label + '"></button>';
+  }).join("");
+
+  function rotKey() { return S.mode === "tiled" ? "rotTiled" : "rotSingle"; }
+
+  function syncControls() {
+    textEl.value = S.text;
+    fontEl.value = S.font;
+    formatEl.value = S.format;
+    $("shadow").checked = S.shadow;
+    Object.keys(ranges).forEach(function (k) { $(k).value = S[k]; });
+    $("rot").value = S[rotKey()];
+    document.querySelectorAll("[data-mode]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode)); });
+    document.querySelectorAll("[data-pos]").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.dataset.pos === S.pos)); });
+    var match = false;
+    document.querySelectorAll(".sw").forEach(function (b) {
+      var on = b.dataset.color.toLowerCase() === S.color.toLowerCase();
+      if (on) match = true;
+      b.setAttribute("aria-pressed", String(on));
+    });
+    $("customWrap").dataset.on = String(!match);
+    if (!match) $("customColor").value = S.color;
+    $("singleOpts").hidden = S.mode !== "single";
+    $("tiledOpts").hidden = S.mode !== "tiled";
+    syncOutputs();
+  }
+  function syncOutputs() {
+    Object.keys(ranges).forEach(function (k) { $(k + "Out").textContent = S[k] + ranges[k]; });
+    $("rotOut").textContent = S[rotKey()] + "°";
+  }
+  function changed(full) {
+    if (full) syncControls(); else syncOutputs();
+    persist();
+    renderButtons();
+    schedule();
+  }
+
+  textEl.addEventListener("input", function () { S.text = textEl.value; changed(false); });
+  Object.keys(ranges).forEach(function (k) {
+    $(k).addEventListener("input", function () { S[k] = parseFloat(this.value); changed(false); });
+  });
+  $("rot").addEventListener("input", function () { S[rotKey()] = parseFloat(this.value); changed(false); });
+  $("shadow").addEventListener("change", function () { S.shadow = this.checked; changed(false); });
+  formatEl.addEventListener("change", function () { S.format = this.value; changed(false); });
+  fontEl.addEventListener("change", function () {
+    S.font = this.value;
+    changed(false);
+    var f = FONTS[S.font];
+    if (document.fonts) document.fonts.load(f.style + " " + f.weight + " 48px " + f.load).then(schedule, function () {});
+  });
+  document.querySelectorAll("[data-mode]").forEach(function (b) {
+    b.addEventListener("click", function () { S.mode = b.dataset.mode; changed(true); });
+  });
+  $("posgrid").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-pos]");
+    if (b) { S.pos = +b.dataset.pos; changed(true); }
+  });
+  document.querySelectorAll(".sw").forEach(function (b) {
+    b.addEventListener("click", function () { S.color = b.dataset.color; changed(true); });
+  });
+  $("customColor").addEventListener("input", function () { S.color = this.value.toUpperCase(); changed(true); });
+
+  strip.addEventListener("click", function (e) {
+    var rm = e.target.closest("[data-remove]");
+    if (rm) { removePhoto(+rm.dataset.remove); return; }
+    if (e.target.closest("[data-add]")) { fileInput.click(); return; }
+    var t = e.target.closest("[data-i]");
+    if (t) { cur = +t.dataset.i; refresh(); }
+  });
+  strip.addEventListener("keydown", function (e) {
+    var t = e.target.closest("[data-i]");
+    if (t && e.target === t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); cur = +t.dataset.i; refresh(); }
+  });
+
+  /* ---------- File input, drag and drop, paste ---------- */
+
+  $("addBtn").addEventListener("click", function () { fileInput.click(); });
+  $("emptyAdd").addEventListener("click", function () { fileInput.click(); });
+  fileInput.addEventListener("change", function () { addFiles(fileInput.files); fileInput.value = ""; });
+
+  var overlay = $("dropOverlay"), dragDepth = 0;
+  function hasFiles(e) { return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0; }
+  window.addEventListener("dragenter", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth++; overlay.hidden = false;
+  });
+  window.addEventListener("dragover", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", function (e) {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) overlay.hidden = true;
+  });
+  window.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth = 0; overlay.hidden = true;
+    addFiles(e.dataTransfer.files);
+  });
+  window.addEventListener("paste", function (e) {
+    var files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length && document.activeElement !== textEl) { e.preventDefault(); addFiles(files); }
+  });
+
+  /* ---------- Toast ---------- */
+
+  var toastEl = $("toast"), toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 3600);
+  }
+
+  /* ---------- Sample photo so the tool opens in a working state ---------- */
+
+  function makeSample() {
+    var W = 1800, H = 1200, c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    var x = c.getContext("2d");
+    var sky = x.createLinearGradient(0, 0, 0, H * 0.75);
+    sky.addColorStop(0, "#1C2A48"); sky.addColorStop(0.55, "#B86E7C"); sky.addColorStop(1, "#F2C28C");
+    x.fillStyle = sky; x.fillRect(0, 0, W, H);
+    var sx = W * 0.64, sy = H * 0.5;
+    var glow = x.createRadialGradient(sx, sy, 0, sx, sy, H * 0.45);
+    glow.addColorStop(0, "rgba(255,240,200,1)"); glow.addColorStop(0.1, "rgba(255,226,170,0.95)");
+    glow.addColorStop(0.11, "rgba(255,205,150,0.4)"); glow.addColorStop(1, "rgba(255,190,140,0)");
+    x.fillStyle = glow; x.fillRect(0, 0, W, H);
+    [["#7A5872", 0.56, 70, 0.0031], ["#57425F", 0.65, 85, 0.0046], ["#3A3049", 0.75, 90, 0.0062], ["#221D2F", 0.87, 70, 0.0085]]
+      .forEach(function (rg, i) {
+        var base = H * rg[1], amp = rg[2], fq = rg[3];
+        x.beginPath(); x.moveTo(0, H);
+        for (var px = 0; px <= W; px += 6) {
+          x.lineTo(px, base - amp * (Math.sin(px * fq + i * 1.7) + 0.5 * Math.sin(px * fq * 2.3 + i) + 0.22 * Math.sin(px * fq * 6.1 + i * 3)));
+        }
+        x.lineTo(W, H); x.closePath(); x.fillStyle = rg[0]; x.fill();
+        var mist = x.createLinearGradient(0, base - amp * 2, 0, base + amp);
+        mist.addColorStop(0, "rgba(242,194,140,0)"); mist.addColorStop(1, "rgba(242,194,140,0.12)");
+        x.fillStyle = mist; x.fillRect(0, base - amp * 2, W, amp * 3);
+      });
+    return c;
+  }
+
+  async function init() {
+    syncControls();
+    renderButtons();
+    try {
+      var sc = makeSample();
+      var bmp = await createImageBitmap(sc);
+      if (!photos.length) {
+        photos.push({ id: ++uid, name: "sample-sunrise.jpg", type: "image/jpeg", size: 0, bitmap: bmp,
+          w: bmp.width, h: bmp.height, thumb: makeThumb(bmp), sample: true });
+        cur = 0;
+      }
+    } catch (e) { /* no sample: start empty */ }
+    refresh();
+    if (document.fonts) {
+      Promise.all(Object.keys(FONTS).map(function (k) {
+        var f = FONTS[k];
+        return document.fonts.load(f.style + " " + f.weight + " 48px " + f.load).catch(function () {});
+      })).then(schedule);
+    }
+  }
+
+  var lastW = 0;
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () {
+      if (wrap.clientWidth !== lastW) { lastW = wrap.clientWidth; schedule(); }
+    }).observe(wrap);
+  } else {
+    window.addEventListener("resize", schedule);
+  }
+
+  init();
+})();
+</script>

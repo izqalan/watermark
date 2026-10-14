@@ -1,0 +1,103 @@
+name: Build
+
+# Every push and pull request builds the exe and uploads it as a workflow artifact.
+# Pushing a tag like v1.2.0 also publishes a GitHub release with the exe attached:
+#
+#   git tag v1.2.0
+#   git push origin v1.2.0
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Work out version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Release tags must look like v1.2.3 (got '$env:GITHUB_REF_NAME')."
+            }
+          } else {
+            $version = "0.0.0-ci.$env:GITHUB_RUN_NUMBER"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1 -Version "${{ steps.version.outputs.version }}"
+
+      # Runs the finished exe on its own (no DLLs next to it) to prove the embedded
+      # image library loads and a photo can be watermarked and saved.
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $work = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\smoke"
+          Copy-Item dist\PhotoWatermarker.exe $work
+          $bmp = New-Object System.Drawing.Bitmap 1200, 800
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.Clear([System.Drawing.Color]::SteelBlue)
+          $g.Dispose()
+          $bmp.Save("$work\sample.jpg", [System.Drawing.Imaging.ImageFormat]::Jpeg)
+          $bmp.Dispose()
+
+          $p = Start-Process "$work\PhotoWatermarker.exe" -WorkingDirectory $work -Wait -PassThru `
+            -ArgumentList '--render', '"Smoke test"', "`"$work\out`"", "`"$work\sample.jpg`""
+          if ($p.ExitCode -ne 0) { throw "Render exited with code $($p.ExitCode)." }
+          $out = Get-Item "$work\out\sample-watermarked.jpg" -ErrorAction Stop
+          Write-Host "Saved $($out.Name) ($($out.Length) bytes)"
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoWatermarker-${{ steps.version.outputs.version }}
+          path: dist/PhotoWatermarker.exe
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhotoWatermarker-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Write checksum
+        working-directory: dist
+        run: sha256sum PhotoWatermarker.exe > PhotoWatermarker.exe.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "$TAG" dist/PhotoWatermarker.exe dist/PhotoWatermarker.exe.sha256 \
+            --title "Photo Watermarker $VERSION" \
+            --generate-notes

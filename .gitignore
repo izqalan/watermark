@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+# The built exe (~27 MB). Rebuild with .\build.ps1, or attach it to a GitHub release instead of committing it.
+dist/
+
+# Half-written exports, in case a test run leaves one behind
+*.partial
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+packages/
+
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Claude Code personal settings
+.claude/settings.local.json
